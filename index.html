@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>لعبة عيادة الأسنان</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #111; /* ← غمّق الخلفية */
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        position: relative;
+      }
+      canvas {
+        background: #000;
+        display: block;
+        width: 100%;
+        max-width: 500px;
+        border: 4px solid #fff;
+        border-radius: 12px;
+      }
+      #hud {
+        position: absolute;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 90%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #fff;
+        font-size: 16px;
+        max-width: 500px;
+      }
+      #progress {
+        flex: 1;
+        margin: 0 10px;
+        background: #555;
+        height: 10px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      #progBar {
+        width: 0%;
+        height: 100%;
+        background: #0f0;
+      }
+      #startOverlay,
+      #gameOverOverlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        font-size: 20px;
+        text-align: center;
+        z-index: 10;
+      }
+      #startOverlay.active,
+      #gameOverOverlay.active {
+        display: flex;
+      }
+      #startOverlay:not(.active),
+      #gameOverOverlay:not(.active) {
+        display: none;
+      }
+      button {
+        padding: 12px 20px;
+        font-size: 18px;
+        margin-top: 15px;
+        cursor: pointer;
+        border: none;
+        border-radius: 8px;
+        background: #0af;
+        color: #fff;
+        max-width: 200px;
+        width: 80%;
+      }
+      #mute {
+        background: #f50;
+        font-size: 14px;
+        padding: 6px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <div>النقاط: <span id="score">0</span></div>
+      <div id="progress"><div id="progBar"></div></div>
+      <button id="mute">🔊</button>
+    </div>
+
+    <canvas id="game" width="500" height="700"></canvas>
+
+    <div id="startOverlay" class="active">
+      <h1>🎮 لعبة عيادة الأسنان</h1>
+      <p>التقط الأسنان السليمة – الأسنان البايظة أو فقدان سنة سليمة = خسارة!</p>
+      <button id="startBtn">ابدأ اللعبة</button>
+    </div>
+
+    <div id="gameOverOverlay">
+      <h1>انتهت اللعبة 😢</h1>
+      <p>نقاطك: <span id="finalScore">0</span></p>
+      <p>أعلى نقاط: <span id="highScore">0</span></p>
+      <button id="restartBtn">إعادة</button>
+    </div>
+
+    <script>
+      // تحميل الصور
+      const bgImg = new Image();
+      bgImg.src = "back.jpg";
+      const toothHealthyImg = new Image();
+      toothHealthyImg.src = "g.png";
+      const toothDecayedImg = new Image();
+      toothDecayedImg.src = "ba.png";
+      const bucketImg = new Image();
+      bucketImg.src = "q.png";
+
+      // تحميل الصوتيات
+      const ting = new Audio("snd_fragment_retrievewav-14728.mp3");
+      const buzz = new Audio("error-010-206498.mp3");
+      const win = new Audio("game-bonus-02-294436.mp3");
+      const bgmusic = new Audio("game-music-loop-7-145285.mp3");
+      bgmusic.loop = true;
+      bgmusic.volume = 0.2;
+
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      let W = canvas.width,
+        H = canvas.height;
+
+      let score = 0;
+      let high = Number(localStorage.getItem("dent_high") || 0);
+      const scoreEl = document.getElementById("score");
+      const progBar = document.getElementById("progBar");
+
+      let mute = false;
+      document.getElementById("mute").onclick = () => {
+        mute = !mute;
+        document.getElementById("mute").textContent = mute ? "🔇" : "🔊";
+        [ting, buzz, win, bgmusic].forEach((a) => (a.muted = mute));
+      };
+
+      const startOverlay = document.getElementById("startOverlay");
+      const gameOverOverlay = document.getElementById("gameOverOverlay");
+      const finalScoreEl = document.getElementById("finalScore");
+      const highScoreEl = document.getElementById("highScore");
+      document.getElementById("startBtn").onclick = startGame;
+      document.getElementById("restartBtn").onclick = startGame;
+
+      // ← صغرت حجم الباسكت
+      const bucket = { w: 70, h: 30, x: (W - 70) / 2, y: H - 60, speed: 8 };
+      const teeth = [];
+      let spawnInterval = 900,
+        lastSpawn = 0,
+        lastTime = performance.now();
+      let fallSpeedBase = 1.2,
+        running = false;
+      let elapsedTime = 0;
+
+      function startGame() {
+        score = 0;
+        teeth.length = 0;
+        spawnInterval = 900;
+        fallSpeedBase = 1.2;
+        elapsedTime = 0;
+        updateHUD();
+        startOverlay.classList.remove("active");
+        gameOverOverlay.classList.remove("active");
+        running = true;
+        lastTime = performance.now();
+        bgmusic.currentTime = 0;
+        if (!mute) bgmusic.play();
+        requestAnimationFrame(loop);
+      }
+
+      function gameOver() {
+        running = false;
+        bgmusic.pause();
+        finalScoreEl.textContent = score;
+        if (score > high) {
+          high = score;
+          localStorage.setItem("dent_high", high);
+        }
+        highScoreEl.textContent = high;
+        gameOverOverlay.classList.add("active");
+      }
+
+      function spawnTooth() {
+        const kind = Math.random() < decayedChance() ? "decayed" : "healthy";
+        const size = 40;
+
+        // المسافة الفاضية في اليمين (منطقة ماينزلش فيها أسنان)
+        const safeRight = 80; // ← عدل الرقم حسب ما تحب (بكسل)
+
+        // نولد السن في عرض الكانفاس ناقص المنطقة الفاضية
+        teeth.push({
+          x: Math.random() * (W - size - safeRight), // ← تعديل هنا
+          y: -size,
+          r: size,
+          kind,
+          speed: fallSpeedBase,
+        });
+      }
+
+      function decayedChance() {
+        return Math.min(0.4, 0.15 + (score / 25000) * 0.3);
+      }
+
+      function update(dt) {
+        elapsedTime += dt;
+        if (elapsedTime > 5000) {
+          fallSpeedBase += 0.05;
+          elapsedTime = 0;
+        }
+
+        lastSpawn += dt;
+        if (lastSpawn > spawnInterval) {
+          spawnTooth();
+          lastSpawn = 0;
+          spawnInterval = Math.max(300, spawnInterval - 5);
+        }
+
+        for (let i = teeth.length - 1; i >= 0; i--) {
+          const t = teeth[i];
+          t.y += t.speed * dt * 0.12 * (1 + score / 2000);
+
+          // ← شرط الالتقاط بدقة أكتر
+          if (
+            t.y + t.r >= bucket.y + 5 &&
+            t.x + t.r > bucket.x + 5 &&
+            t.x < bucket.x + bucket.w - 5
+          ) {
+            if (t.kind === "healthy") {
+              score += 100;
+              if (!mute) ting.play();
+              if (score >= 25000) {
+                if (!mute) win.play();
+                alert("🎉 مبروك! حصلت على خصم 10%");
+              }
+            } else {
+              // لو سن مسوس نزل في الباسكت → خسارة
+              if (!mute) buzz.play();
+              gameOver();
+              return;
+            }
+            teeth.splice(i, 1);
+            updateHUD();
+            continue;
+          }
+          // ← لو السن نزل تحت
+          // لو السن نزل تحت الباسكت
+          if (t.y > bucket.y + bucket.h) {
+            if (t.kind === "healthy") {
+              // سنة سليمة فوتها → خسارة
+              gameOver();
+              return;
+            } else {
+              // سنة مسوسة بمجرد ما تعدي الباسكت تختفي فوراً بدون خسارة
+              teeth.splice(i, 1);
+              updateHUD();
+              continue;
+            }
+          }
+        }
+      }
+      function updateHUD() {
+        scoreEl.textContent = score;
+        const pct = Math.min(100, Math.round((score / 25000) * 100));
+        progBar.style.width = pct + "%";
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(bgImg, 0, 0, W, H);
+        for (const t of teeth) {
+          const img = t.kind === "healthy" ? toothHealthyImg : toothDecayedImg;
+          ctx.drawImage(img, t.x, t.y, t.r, t.r);
+        }
+        ctx.drawImage(bucketImg, bucket.x, bucket.y, bucket.w, bucket.h);
+      }
+
+      function loop(now) {
+        if (!running) return;
+        const dt = now - lastTime;
+        lastTime = now;
+        update(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+      // التحكم بالماوس داخل الكانفاس
+      canvas.addEventListener("mousemove", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        // نجيب النص اللي هنحطه للسلة
+        let newX = mx - bucket.w / 2;
+        // نتأكد ما تخرجش
+        newX = Math.max(0, Math.min(newX, W - bucket.w));
+        bucket.x = newX;
+      });
+
+      // التحكم باللمس في أي مكان في الصفحة
+      document.addEventListener(
+        "touchstart",
+        (e) => {
+          const rect = canvas.getBoundingClientRect();
+          const mx = e.touches[0].clientX - rect.left;
+          let newX = mx - bucket.w / 2;
+          newX = Math.max(0, Math.min(newX, W - bucket.w));
+          bucket.x = newX;
+        },
+        { passive: false }
+      );
+
+      document.addEventListener(
+        "touchmove",
+        (e) => {
+          const rect = canvas.getBoundingClientRect();
+          const mx = e.touches[0].clientX - rect.left;
+          let newX = mx - bucket.w / 2;
+          newX = Math.max(0, Math.min(newX, W - bucket.w));
+          bucket.x = newX;
+          e.preventDefault();
+        },
+        { passive: false }
+      );
+
+      // Resize canvas responsive
+      function resizeCanvas() {
+        const scale = window.innerWidth < 520 ? window.innerWidth / 500 : 1;
+        canvas.style.transform = `scale(${scale})`;
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+    </script>
+  </body>
+</html>
